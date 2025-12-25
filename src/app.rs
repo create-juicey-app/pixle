@@ -1,7 +1,8 @@
 use crate::canvas::Canvas;
 use crate::commands::PaintCommand;
 use crate::scripting::LuaEngine;
-use winit::{event::*, window::Window};
+use egui::{Color32, Id, LayerId, Order, Stroke};
+use winit::{event::*, window::Window}; // Import Egui rendering stuff
 
 pub struct AppState {
     surface: wgpu::Surface<'static>,
@@ -25,6 +26,7 @@ pub struct AppState {
     mouse_pos: (f32, f32),
     mouse_pressed: bool,
     brush_color: [f32; 3],
+    brush_size: f32, // <--- ADDED
 }
 
 impl AppState {
@@ -60,11 +62,9 @@ impl AppState {
         };
         surface.configure(&device, &config);
 
-        // 1. Setup Modules
         let canvas = Canvas::new(&device, &queue, 800, 600);
         let lua = LuaEngine::new();
 
-        // 2. Setup Shader
         let shader = device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             entries: &[
@@ -88,7 +88,6 @@ impl AppState {
             label: None,
         });
 
-        // Link Canvas to Shader
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             layout: &bind_group_layout,
             entries: &[
@@ -162,6 +161,7 @@ impl AppState {
             mouse_pos: (0.0, 0.0),
             mouse_pressed: false,
             brush_color: [0.0, 0.0, 0.0],
+            brush_size: 10.0, // Default Size
         }
     }
 
@@ -203,10 +203,11 @@ impl AppState {
             let tex_y = (my * scale_y) as u32;
 
             if tex_x < self.canvas.width && tex_y < self.canvas.height {
-                // 1. Get commands from Lua
-                let commands = self.lua.process_input(tex_x, tex_y, self.brush_color);
+                // Pass self.brush_size to Lua
+                let commands =
+                    self.lua
+                        .process_input(tex_x, tex_y, self.brush_size, self.brush_color);
 
-                // 2. Execute commands on Canvas
                 let mut dirty = false;
                 for cmd in commands {
                     match cmd {
@@ -222,8 +223,6 @@ impl AppState {
                         }
                     }
                 }
-
-                // 3. Upload to GPU if changed
                 if dirty {
                     self.canvas.update_pixels(&self.queue);
                 }
@@ -262,11 +261,37 @@ impl AppState {
 
         let raw_input = self.egui_state.take_egui_input(window);
         let full_output = self.egui_ctx.run(raw_input, |ctx| {
+            // 1. Tool Panel
             egui::Window::new("Tools").show(ctx, |ui| {
-                ui.heading("Pixle v0.2");
-                ui.label("fucking draw");
+                ui.heading("Pixle");
                 ui.color_edit_button_rgb(&mut self.brush_color);
+                // Added Slider
+                ui.add(egui::Slider::new(&mut self.brush_size, 1.0..=50.0).text("Size"));
             });
+
+            // 2. Custom Cursor Overlay
+            // We only draw this if we are hovering over the canvas (not over a UI window)
+            if !ctx.is_pointer_over_area() {
+                let painter =
+                    ctx.layer_painter(LayerId::new(Order::Foreground, Id::new("cursor_overlay")));
+                let mouse_pos = egui::Pos2 {
+                    x: self.mouse_pos.0,
+                    y: self.mouse_pos.1,
+                };
+
+                // Scale radius based on window/texture ratio (rough approximation for now)
+                let zoom_ratio = self.size.width as f32 / self.canvas.width as f32;
+                let visual_radius = (self.brush_size / 2.0) * zoom_ratio;
+
+                // Draw White Circle
+                painter.circle_stroke(mouse_pos, visual_radius, Stroke::new(1.0, Color32::WHITE));
+                // Draw Black Inner Circle (High Contrast)
+                painter.circle_stroke(
+                    mouse_pos,
+                    visual_radius - 1.0,
+                    Stroke::new(1.0, Color32::BLACK),
+                );
+            }
         });
 
         self.egui_state
