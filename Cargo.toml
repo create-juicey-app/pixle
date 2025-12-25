@@ -12,3 +12,4 @@ egui = "0.26"
 egui-winit = "0.26"
 egui-wgpu = "0.26"
 bytemuck = { version = "1.14", features = ["derive"] }
+env_logger = "0.10"
